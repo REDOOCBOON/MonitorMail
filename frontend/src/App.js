@@ -1,0 +1,877 @@
+
+import React, { useState, useCallback, useEffect } from 'react';
+import { 
+    Container, Box, Typography, TextField, Button, Grid, Paper, CircularProgress, 
+    AppBar, Toolbar, Modal, Fade, Backdrop, IconButton, Snackbar, Alert, Link,
+    Checkbox, FormControlLabel, LinearProgress, Tabs, Tab, Select, MenuItem, FormControl, InputLabel,
+    Card, CardContent, List, ListItem, ListItemText, Divider, Table, TableBody, TableCell, 
+    TableContainer, TableHead, TableRow
+} from '@mui/material';
+import { ThemeProvider, createTheme } from '@mui/material/styles';
+import CssBaseline from '@mui/material/CssBaseline';
+import UploadFileIcon from '@mui/icons-material/UploadFile';
+import CloseIcon from '@mui/icons-material/Close';
+import MailOutlineIcon from '@mui/icons-material/MailOutline';
+import PhoneIcon from '@mui/icons-material/Phone';
+import AttachmentIcon from '@mui/icons-material/Attachment';
+import * as api from './api';
+import './App.css';
+
+// --- THEME & LOGIN (Unchanged) ---
+const darkTheme = createTheme({
+    palette: { mode: 'dark', primary: { main: '#7986cb' }, secondary: { main: '#ce93d8' }, background: { 
+        default: '#121212', paper: '#1e1e1e' } },
+    typography: { fontFamily: 'Inter, sans-serif' }
+});
+
+const LoginScreen = ({ onLogin }) => {
+    const [loading, setLoading] = useState(false);
+    const [error, setError] = useState('');
+    const handleLogin = async (event) => {
+        event.preventDefault();
+        const data = new FormData(event.currentTarget);
+        setLoading(true);
+        setError('');
+        try {
+            const result = await api.login(data.get('email'), data.get('password'));
+            onLogin(result.user, result.token);
+        } catch (err) { setError(err.message); } 
+        finally { setLoading(false); }
+    };
+    return (
+         <Container component="main" maxWidth="xs">
+             <Paper elevation={6} sx={{ mt: 8, p: 4, display: 'flex', flexDirection: 'column', alignItems: 'center', borderRadius: 2 }}>
+             
+                <Typography component="h1" variant="h5" color="primary" sx={{ mb: 2 }}>MonitorMail</Typography>
+                 <Box component="form" onSubmit={handleLogin} sx={{ mt: 1 }}>
+                     <TextField margin="normal" required fullWidth id="email" label="Email Address" name="email" autoComplete="email" autoFocus />
+            
+                     <TextField margin="normal" required fullWidth name="password" label="Password" type="password" id="password" autoComplete="current-password" />
+                     {error && <Alert severity="error" sx={{ width: '100%', mt: 2 }}>{error}</Alert>}
+                     <Button type="submit" fullWidth variant="contained" sx={{ mt: 3, mb: 
+                        2 }} disabled={loading}>
+                         {loading ? <CircularProgress size={24} /> : 'Sign In'}
+                     </Button>
+                 </Box>
+     
+            </Paper>
+         </Container>
+    );
+};
+
+// --- Styles for Modals ---
+const modalBaseStyle = { 
+  position: 'absolute',
+  top: '50%',
+  left: '50%',
+  transform: 'translate(-50%, -50%)',
+  bgcolor: 'background.paper', 
+  boxShadow: 24, 
+  p: 4,
+  borderRadius: 2,
+  display: 'flex',
+  flexDirection: 'column',
+  maxHeight: '90vh',
+  border: '1px solid rgba(255, 255, 255, 0.23)' 
+};
+
+const emailModalStyle = { ...modalBaseStyle, width: '80vw', maxWidth: 1200 };
+const editModalStyle = { ...modalBaseStyle, width: 600, overflowY: 'auto' }; 
+const massAlertModalStyle = { ...modalBaseStyle, width: '60vw', maxWidth: 800 };
+
+
+// --- EmailModal (for Workflow) ---
+const EmailModal = ({ open, onClose, data, onSendAll, onSendSingle, loading, templates, title }) => { 
+    const [senderEmail, setSenderEmail] = useState('');
+    const [senderPassword, setSenderPassword] = useState('');
+    const [emailBodies, setEmailBodies] = useState({});
+    const [attachment, setAttachment] = useState(null);
+    const [singleSendLoading, 
+        setSingleSendLoading] = useState(null);
+    const [searchQuery, setSearchQuery] = useState('');
+    const [isSendingAll, setIsSendingAll] = useState(false);
+    const [progress, setProgress] = useState(0);
+
+    const generateEmailBody = (templateBody, student) => {
+        const subjects = student?.subjects || []; 
+        let subjectListText;
+
+        if (subjects.length > 0) {
+            subjectListText = subjects.map(s => `  - ${s.Subject || s.course_title}: ${s.Percentage || s.attn_percent}%`).join('\n');
+        } else {
+      
+            subjectListText = 'As per the attached/most recent report.'; 
+        }
+        
+        const studentName = student?.name || 'Student'; 
+        const body = typeof templateBody === 'string' ? templateBody : '';
+        
+        let processedBody = body.replace(/\[Student Name\]/g, studentName);
+        processedBody = processedBody.replace(/\[Subject List\]/g, subjectListText);
+        
+        return processedBody;
+    };
+
+
+    useEffect(() => {
+        if (open) {
+    
+            const defaultTemplate = templates.find(t => t.name.toLowerCase().includes('default'));
+            const initialBodies = {};
+            if(Array.isArray(data)) {
+                data.forEach(student => {
+                  
+                    if(student && student.reg_no) {
+                        initialBodies[student.reg_no] = generateEmailBody(defaultTemplate?.body || 'Dear [Student Name],\n\nPlease find the attached report regarding your attendance.\n\nRegards.', student);
+                     }
+            
+                });
+            }
+            setEmailBodies(initialBodies);
+            setAttachment(null);
+            setSearchQuery('');
+            setIsSendingAll(false);
+            setProgress(0);
+ 
+        }
+    }, [data, open, templates]);
+    
+    const handleTemplateChange = (templateId) => {
+        const template = templates.find(t => t.id === templateId);
+        if (template && Array.isArray(data)) {
+            const updatedBodies = {};
+            data.forEach(student => {
+                 if(student && 
+                    student.reg_no) {
+                    updatedBodies[student.reg_no] = generateEmailBody(template.body, student);
+                 }
+            });
+            setEmailBodies(updatedBodies);
+        }
+    };
+
+    const handleBodyChange = (regNo, value) => setEmailBodies(prev => ({ ...prev, [regNo]: value }));
+    const handleAttachmentChange = (e) => setAttachment(e.target.files[0]);
+
+    const handleSendAll = async () => {
+        setIsSendingAll(true);
+        setProgress(0);
+        const validStudents = Array.isArray(data) ? data.filter(student => student && student.reg_no) : [];
+        const payload = { 
+            sender_email: senderEmail, 
+            sender_password: senderPassword, 
+            email_data: validStudents.map(student => 
+                ({ ...student, email_body: emailBodies[student.reg_no], subject: "Important: Attendance Notification" })) 
+        };
+        const timer = setInterval(() => { setProgress(p => p >= 90 ? 90 : p + 10); }, 300);
+        try {
+            await onSendAll(payload, attachment);
+            setProgress(100);
+        } catch (error) { setProgress(0); } 
+        finally {
+        
+            clearInterval(timer);
+            setTimeout(() => { 
+                setIsSendingAll(false); 
+                if (progress === 100) onClose(); 
+            }, 1000); 
+        }
+    };
+    const handleSendSingle = async (student) => {
+      
+        if(!student || !student.reg_no) return; 
+        setSingleSendLoading(student.reg_no);
+        const payload = { 
+            sender_email: senderEmail, 
+            sender_password: senderPassword, 
+            email_data: [{ ...student, email_body: emailBodies[student.reg_no], subject: "Important: Attendance Notification" }] 
+        };
+        await onSendSingle(payload, attachment, student.reg_no);
+        setSingleSendLoading(null);
+    };
+
+    const 
+        filteredData = Array.isArray(data) ? data.filter(student => 
+        student && student.reg_no && student.reg_no.toLowerCase().includes(searchQuery.toLowerCase())
+    ) : [];
+
+    return (
+        <Modal
+            open={open}
+            onClose={onClose}
+            closeAfterTransition
+       
+            BackdropComponent={Backdrop}
+            BackdropProps={{
+                timeout: 500,
+                sx: { backgroundColor: 'rgba(0, 0, 0, 0.7)' } 
+            }}
+       
+        >
+            <Fade in={open}>
+                <Box sx={emailModalStyle}> 
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}><Typography variant="h6">{title || 'Review & Send Emails'}</Typography><IconButton onClick={onClose}><CloseIcon /></IconButton></Box>
+       
+                    <Grid container spacing={2} sx={{ mb: 2 }}>
+                        <Grid item xs={12} sm={4}><TextField fullWidth label="Your Gmail Address" value={senderEmail} onChange={e => setSenderEmail(e.target.value)} disabled={isSendingAll} /></Grid>
+                     
+                        <Grid item xs={12} sm={4}><TextField fullWidth type="password" label="Your Google App Password" value={senderPassword} onChange={e => setSenderPassword(e.target.value)} helperText="Use a Google App Password." disabled={isSendingAll} /></Grid>
+                        <Grid item xs={12} sm={4}>
+                           
+                            <FormControl fullWidth>
+                                <InputLabel>Select Template</InputLabel>
+                                <Select label="Select Template" onChange={e => handleTemplateChange(e.target.value)} defaultValue="">
+    
+                                    {templates.map(t => <MenuItem key={t.id} value={t.id}>{t.name}</MenuItem>)}
+                                </Select>
+         
+                            </FormControl>
+                        </Grid>
+                    </Grid>
+              
+                    <TextField fullWidth label="Search by Registration No." variant="outlined" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} sx={{ mb: 2 }} disabled={isSendingAll} />
+                    <Box sx={{ overflowY: 'auto', flexGrow: 1, p: 1 }}>
+                        {filteredData.map(student => (
+ 
+                             student && student.reg_no && (
+                                <Paper key={student.reg_no} variant="outlined" sx={{ p: 2, mb: 2, borderRadius: 2 }}>
+   
+                                    <Typography variant="subtitle1" fontWeight="bold">{student.name || 'N/A'} ({student.reg_no})</Typography>
+                                    <Typography variant="body2" color="text.secondary">To: {student.student_email || 'N/A'} | Cc: {student.parent_email || 'N/A'}</Typography>
+                                    <TextField multiline fullWidth rows={8} value={emailBodies[student.reg_no] || ''} onChange={e => handleBodyChange(student.reg_no, e.target.value)} className="email-body-textarea" disabled={isSendingAll}/>
+                      
+                                    <Button variant="outlined" size="small" sx={{ mt: 1 }} disabled={!senderEmail || !senderPassword || singleSendLoading === student.reg_no || isSendingAll} onClick={() => handleSendSingle(student)}>
+                                        {singleSendLoading === student.reg_no ? <CircularProgress 
+                                            size={20} /> : 'Send Individually'}
+                                    </Button>
+                                </Paper>
+     
+                            )
+                        ))}
+                         {filteredData.length === 0 && 
+                            <Typography color="text.secondary" align="center">No students match your search.</Typography>}
+                    </Box>
+                    {isSendingAll && (<Box sx={{ width: '100%', my: 2 }}><LinearProgress variant="determinate" value={progress} /><Typography variant="body2" align="center" sx={{mt: 1}}>Sending... {`${Math.round(progress)}%`}</Typography></Box>)}
+               
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 2, gap: 2, flexWrap: 'wrap' }}>
+                        <Button variant="outlined" component="label" startIcon={<AttachmentIcon />} disabled={isSendingAll}>Attach File<input type="file" hidden onChange={handleAttachmentChange} /></Button>
+                        
+                        {attachment && <Typography variant="body2" noWrap sx={{maxWidth: '200px'}}>{attachment.name}</Typography>}
+                        <Box flexGrow={1} />
+                        <Button onClick={handleSendAll} variant="contained" disabled={loading || isSendingAll || filteredData.length === 0}>{isSendingAll ? 'Sending...' : 'Send All Emails'}</Button>
+      
+                    </Box>
+                </Box>
+            </Fade>
+        </Modal>
+    );
+};
+
+// --- Mass Alert Modal ---
+const MassAlertModal = ({ open, onClose, onSend, loading, templates }) => {
+    // 
+    const [senderEmail, setSenderEmail] = useState('');
+    const [senderPassword, setSenderPassword] = useState('');
+    const [subject, setSubject] = useState('');
+    const [body, setBody] = useState('');
+    const [attachment, setAttachment] = useState(null);
+
+    useEffect(() => {
+        if (open) {
+            setSenderEmail('');
+            setSenderPassword('');
+      
+            setSubject('');
+            setBody('');
+            setAttachment(null);
+        }
+    }, [open]);
+
+    const handleTemplateChange = (templateId) => {
+        const template = templates.find(t => t.id === templateId);
+        if (template) {
+          
+            setBody(template.body); 
+        }
+    };
+
+    const handleAttachmentChange = (e) => setAttachment(e.target.files[0]);
+
+    const handleSend = () => {
+        const payload = {
+            sender_email: senderEmail,
+            sender_password: senderPassword,
+            subject: subject,
+        
+            email_body: body
+        };
+        onSend(payload, attachment);
+    };
+
+    return (
+        <Modal open={open} onClose={onClose} closeAfterTransition BackdropComponent={Backdrop} BackdropProps={{ timeout: 500, sx: { backgroundColor: 'rgba(0, 0, 0, 0.7)' } }}>
+            <Fade in={open}>
+                <Box sx={massAlertModalStyle}>
+     
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                        <Typography variant="h6">Send Mass Notification</Typography>
+                        <IconButton 
+                            onClick={onClose}><CloseIcon /></IconButton>
+                    </Box>
+                    <Grid container spacing={2}>
+                        <Grid item xs={12} sm={6}><TextField fullWidth label="Your Gmail Address" value={senderEmail} onChange={e => setSenderEmail(e.target.value)} disabled={loading} /></Grid>
+                        <Grid item xs={12} sm={6}><TextField fullWidth type="password" label="Your Google App Password" value={senderPassword} onChange={e => setSenderPassword(e.target.value)} helperText="Use a Google App Password." disabled={loading} /></Grid>
+                        <Grid item xs={12} sm={6}><TextField fullWidth label="Subject" 
+                            value={subject} onChange={e => setSubject(e.target.value)} disabled={loading} /></Grid>
+                        <Grid item xs={12} sm={6}>
+                            <FormControl fullWidth>
+                
+                                <InputLabel>Select Template</InputLabel>
+                                <Select label="Select Template" onChange={e => handleTemplateChange(e.target.value)} defaultValue="" disabled={loading}>
+                     
+                                    {templates.map(t => <MenuItem key={t.id} value={t.id}>{t.name}</MenuItem>)}
+                                </Select>
+                          
+                            </FormControl>
+                        </Grid>
+                        <Grid item xs={12}>
+                         
+                            <TextField fullWidth multiline rows={10} label="Email Body" value={body} onChange={e => setBody(e.target.value)} className="email-body-textarea" helperText="Use [Student Name] as a placeholder for personalization." disabled={loading} />
+                        </Grid>
+                    </Grid>
+          
+                    <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mt: 2, gap: 2, flexWrap: 'wrap' }}>
+                        <Button variant="outlined" component="label" startIcon={<AttachmentIcon />} disabled={loading}>
+                        
+                            Attach File
+                            <input type="file" hidden onChange={handleAttachmentChange} />
+                        </Button>
+                
+                        {attachment && <Typography variant="body2" noWrap sx={{maxWidth: '200px'}}>{attachment.name}</Typography>}
+                        <Box flexGrow={1} />
+                        <Button onClick={handleSend} variant="contained" disabled={loading || !senderEmail || !senderPassword || !subject || !body}>
+  
+                            {loading ? <CircularProgress size={24} /> : 'Send to All Students'}
+                        </Button>
+                  
+                    </Box>
+                </Box>
+            </Fade>
+        </Modal>
+    );
+};
+
+
+// --- MAIN APP COMPONENT ---
+function App() {
+    const [token, setToken] = useState(localStorage.getItem('token'));
+    const [user, setUser] = useState(JSON.parse(localStorage.getItem('user')));
+    const [loading, setLoading] = useState(false);
+    const [snackbar, setSnackbar] = useState({ open: false, 
+        message: '', severity: 'info' });
+    const [view, setView] = useState('dashboard');
+    
+    // Workflow state
+    const [file, setFile] = useState(null);
+    const [intermediateCsv, setIntermediateCsv] = useState(''); 
+    const [displayData, setDisplayData] = useState([]); 
+    const [isProcessingPdf, setIsProcessingPdf] = useState(false);
+    const [isFetchingDetails, setIsFetchingDetails] = useState(false);
+    const [isModalOpen, setIsModalOpen] = useState(false);
+
+    // Templates state
+    const [templates, setTemplates] = useState([]);
+    const [templateModalOpen, setTemplateModalOpen] = useState(false);
+    const [currentTemplate, setCurrentTemplate] = useState({ id: null, name: '', body: '' });
+
+    // History state
+    const [history, setHistory] = useState([]);
+    const [historySearch, setHistorySearch] = useState('');
+
+    // Dashboard state
+    const [analytics, setAnalytics] = useState(null);
+
+    // Teacher Management state
+   
+    const [teachers, setTeachers] = useState([]);
+    
+    // Student Management state
+    const [students, setStudents] = useState([]);
+    const [managementSearch, setManagementSearch] = useState('');
+    const [editModalOpen, setEditModalOpen] = useState(false); 
+    const [currentItem, setCurrentItem] = useState(null); 
+    const [modalType, setModalType] = useState(''); // 'teacher' or 'student'
+    
+    // Alert tab state
+    const [isAlertModalOpen, setIsAlertModalOpen] = useState(false);
+    const [isSendingAlert, setIsSendingAlert] = useState(false);
+
+
+    // --- DATA FETCHING ---
+    const fetchAnalytics = 
+        useCallback(async () => { try { const data = await api.getDashboardAnalytics(); setAnalytics(data); } catch (err) { setSnackbar({ open: true, message: `Failed to fetch analytics: ${err.message}`, severity: 'error' }); } }, []);
+    const fetchTemplates = useCallback(async () => { try { const data = await api.getTemplates(); setTemplates(data); } catch (err) { setSnackbar({ open: true, message: `Failed to fetch templates: ${err.message}`, severity: 'error' }); } }, []);
+    const fetchHistory = useCallback(async (search = historySearch) => { try { const 
+        data = await api.getHistory(search); setHistory(data); } catch (err) { setSnackbar({ open: true, message: `Failed to fetch history: ${err.message}`, severity: 'error' }); } }, [historySearch]);
+    const fetchTeachers = useCallback(async () => { try { const data = await api.getTeachers(); setTeachers(data); } catch (err) { setSnackbar({ open: true, message: `Failed to fetch teachers: ${err.message}`, severity: 'error' }); } }, []);
+    const fetchStudents = useCallback(async (search = managementSearch) => { 
+        setLoading(true); 
+ 
+        try { 
+            const data = await api.getStudents(search); 
+            setStudents(data); 
+        } catch (err) { 
+            setSnackbar({ open: true, message: `Failed to fetch students: ${err.message}`, severity: 'error' }); 
+  
+        } finally {
+            setLoading(false);
+        }
+    }, [managementSearch]); 
+
+    useEffect(() => {
+        if (token) {
+            if (view === 'templates' || view === 'alert' || view === 'workflow') fetchTemplates(); 
+            
+            if (view === 'dashboard') fetchAnalytics();
+            if (view === 'history') fetchHistory();
+            if (view === 'teachers') fetchTeachers();
+            if (view === 'students') fetchStudents(managementSearch);
+        }
+    }, [view, token, fetchAnalytics, fetchTemplates, fetchHistory, fetchTeachers, fetchStudents, 
+        managementSearch]); 
+
+    // --- HANDLERS ---
+    const handleLogin = (user, receivedToken) => { localStorage.setItem('token', receivedToken); localStorage.setItem('user', JSON.stringify(user)); setToken(receivedToken); setUser(user); };
+    const handleLogout = () => { localStorage.removeItem('token'); localStorage.removeItem('user'); setToken(null); setUser(null); setView('dashboard'); };
+    const handleViewChange = (event, newValue) => { setView(newValue); };
+    
+    // Workflow handlers
+    const processPdf = useCallback(async (selectedFile) => {
+        if (!selectedFile) return;
+        setIsProcessingPdf(true);
+    
+        setIntermediateCsv(''); setDisplayData([]); setSnackbar({ open: false, message: '' });
+        try {
+            const result = await api.uploadPdf(selectedFile);
+            setIntermediateCsv(result.csv_data);
+            setSnackbar({ open: true, message: 'PDF processed. Ready to list.', severity: 'success' });
+      
+        } catch (err) { setSnackbar({ open: true, message: `PDF Error: ${err.message}`, severity: 'error' }); } 
+        finally { setIsProcessingPdf(false); }
+    }, []);
+    const handleFileChange = (e) => { const f = e.target.files[0]; setFile(f); processPdf(f); };
+    const handleListAll = async () => {
+        if (!intermediateCsv) return;
+        setIsFetchingDetails(true); setDisplayData([]); setSnackbar({ open: false, message: '' });
+        try {
+    
+            if(templates.length === 0) await fetchTemplates(); 
+            const result = await api.fetchStudentDetails(intermediateCsv); 
+            setDisplayData(result);
+            if(result.length === 0) setSnackbar({ open: true, message: 'No student details found.', severity: 'warning' });
+        } catch (err) { setSnackbar({ open: true, message: `Fetch Error: ${err.message}`, severity: 'error' }); } 
+        finally { setIsFetchingDetails(false); }
+    };
+    const handleListLow = async () => {
+       
+        if (!intermediateCsv) return;
+        setIsFetchingDetails(true); setDisplayData([]); setSnackbar({ open: false, message: '' });
+        try {
+            const sortResult = await api.sortAttendance(intermediateCsv);
+            if (!sortResult.sorted_csv_data || sortResult.sorted_csv_data.trim() === 'Reg.No,Subject,Percentage') {
+                 setSnackbar({ open: true, message: 'No students <75%.', severity: 'info' }); setDisplayData([]); setIsFetchingDetails(false); return;
+            }
+           
+            if(templates.length === 0) await fetchTemplates(); 
+            const fetchResult = await api.fetchStudentDetails(sortResult.sorted_csv_data); 
+            setDisplayData(fetchResult);
+            if(fetchResult.length === 0) setSnackbar({ open: true, message: 'Low attendance found, but no DB match.', severity: 'warning' });
+        } catch (err) { setSnackbar({ open: true, message: `Fetch Error: ${err.message}`, severity: 'error' }); } 
+        finally { setIsFetchingDetails(false); }
+    };
+
+    // Alert Tab Handler
+    const handleSendMassAlert = async (payload, attachment) => {
+       
+        setIsSendingAlert(true);
+        setSnackbar({ open: false, message: '' });
+        try {
+            const result = await api.sendMassAlert(payload, attachment);
+            setSnackbar({ open: true, message: `Mass alert sent! ${result.results.success_count} succeeded, ${result.results.fail_count} failed.`, severity: 'success' });
+            setIsAlertModalOpen(false);
+            fetchAnalytics(); 
+        } catch (err) {
+            setSnackbar({ open: true, message: `Alert Failed: ${err.message}`, severity: 'error' });
+        } finally {
+       
+            setIsSendingAlert(false);
+        }
+    };
+    
+    // Email handlers (for Workflow)
+    const handleSendAllEmails = async (payload, attachment) => { setLoading(true); try { const result = await api.sendEmails(payload, attachment); if (result.success) { setSnackbar({ open: true, message: `Email process complete!`, severity: 'success' }); fetchAnalytics(); setIsModalOpen(false); } else { setSnackbar({ open: true, message: `Sending failed: ${result.reason}`, severity: 'error' }); } } catch (err) { setSnackbar({ open: true, message: err.message, severity: 'error' });
+        throw err; } finally { setLoading(false); } };
+    const handleSendSingleEmail = async (payload, attachment, regNo) => { try { const result = await api.sendEmails(payload, attachment); if (result.success && result.results[0]?.status === 'success') { setSnackbar({ open: true, message: `Email sent to ${regNo}.`, severity: 'success' }); fetchAnalytics(); } else { const reason = result.results[0]?.reason || result.reason; setSnackbar({ open: true, message: `Failed to send to ${regNo}: ${reason}`, severity: 'error' }); } } catch (err) { setSnackbar({ open: true, message: `Failed to 
+        send to ${regNo}: ${err.message}`, severity: 'error' }); } };
+
+    // Template handlers
+    const handleOpenTemplateModal = (template = { id: null, name: '', body: '' }) => { setCurrentTemplate(template); setTemplateModalOpen(true); };
+    const handleSaveTemplate = async () => { try { await api.saveTemplate(currentTemplate); setTemplateModalOpen(false); fetchTemplates(); setSnackbar({ open: true, message: 'Template saved!', severity: 'success' }); } catch (err) { setSnackbar({ open: true, message: `Save failed: ${err.message}`, severity: 'error' }); } };
+    const handleDeleteTemplate = async (id) => 
+        { if (window.confirm('Are you sure?')) { try { await api.deleteTemplate(id); fetchTemplates(); setSnackbar({ open: true, message: 'Template deleted.', severity: 'info' }); } catch (err) { setSnackbar({ open: true, message: `Delete failed: ${err.message}`, severity: 'error' }); } } };
+    
+    // Management Handlers for Both Types
+    const handleOpenEditModal = (item, type) => { 
+        setCurrentItem({ ...item }); 
+        setModalType(type); 
+        setEditModalOpen(true); 
+    };
+    
+    const handleSaveItem = async () => { 
+   
+        setLoading(true); 
+        try {
+            if (modalType === 'teacher') {
+                await api.saveTeacher(currentItem);
+                fetchTeachers();
+            } else if (modalType === 'student') {
+                await api.saveStudent(currentItem);
+                fetchStudents(managementSearch);
+            }
+          
+            setEditModalOpen(false);
+            setSnackbar({ open: true, message: `${modalType} saved!`, severity: 'success' }); 
+        } catch (err) { 
+            setSnackbar({ open: true, message: `Save failed: ${err.message}`, severity: 'error' }); 
+        } finally {
+            setLoading(false);
+        }
+    };
+    
+    const handleDeleteTeacher = async (id) => { if (window.confirm('Are you sure?')) { try { await api.deleteTeacher(id); fetchTeachers(); setSnackbar({ open: 
+        true, message: 'Teacher deleted.', severity: 'info' }); } catch (err) { setSnackbar({ open: true, message: `Delete failed: ${err.message}`, severity: 'error' }); } } };
+    
+    const handleDeleteStudent = async (id) => { 
+        if (window.confirm('Are you sure you want to delete this student?')) { 
+            try { 
+             
+                await api.deleteStudent(id); 
+                fetchStudents(managementSearch); 
+                setSnackbar({ open: true, message: 'Student deleted.', severity: 'info' }); 
+            } catch (err) { 
+                setSnackbar({ open: true, message: `Delete failed: ${err.message}`, severity: 'error' }); 
+            } 
+        } 
+    };
+
+    const handleItemChange = (e) => { const { name, value, type, checked } = e.target; setCurrentItem(prev => 
+        ({ ...prev, [name]: type === 'checkbox' ? checked : value })); };
+
+    if (!token) { return <ThemeProvider theme={darkTheme}><CssBaseline /><LoginScreen onLogin={handleLogin} /></ThemeProvider>; }
+
+    // --- RENDER ---
+    return (
+        <ThemeProvider theme={darkTheme}>
+             <Box sx={{ display: 'flex', flexDirection: 'column', minHeight: '100vh' }}>
+              
+                <CssBaseline />
+                 {/* AppBar */}
+                 <AppBar position="static" color="default" elevation={1}>
+                     <Toolbar>
+             
+                        <Typography variant="h6" component="div" sx={{ flexGrow: 1, fontWeight: 'bold' }}>MonitorMail</Typography>
+                        <Link href="https://academia.srmist.edu.in/" target="_blank" rel="noopener noreferrer" color="inherit" sx={{ textDecoration: 'none', mr: 2, '&:hover': { textDecoration: 'underline' }}}>ACADEMIA</Link>
+                   
+                        <Button color="inherit" onClick={handleLogout}>Logout</Button>
+                    </Toolbar>
+                 </AppBar>
+                 
+                
+                {/* Main Content */}
+                 <Container component="main" sx={{ py: 4, flexGrow: 1 }}>
+                     {/* Tabs */}
+                    <Box sx={{ borderBottom: 1, borderColor: 'divider', 
+                        mb: 3 }}>
+                        <Tabs value={view} onChange={handleViewChange} variant="scrollable" scrollButtons="auto">
+                            <Tab label="Dashboard" value="dashboard" />
+                
+                            <Tab label="Low Attendance" value="workflow" />
+                            
+                            <Tab label="Alert/Notify" value="alert" />
+                            <Tab label="Email Templates" value="templates" />
+                            <Tab label="Communication History" value="history" />
+          
+                            {user.is_admin && <Tab label="Teacher Management" value="teachers" />}
+                            <Tab label="Student Management" value="students" />
+                     
+                        </Tabs>
+                    </Box>
+
+                     {/* Views */}
+                     {view === 'dashboard' && ( analytics ? ( 
+  
+                        <Grid container spacing={3}>
+                            <Grid item xs={12} md={4}><Card><CardContent><Typography variant="h6">Emails Sent Today</Typography><Typography variant="h3">{analytics.emails_sent_today}</Typography></CardContent></Card></Grid>
+                  
+                            <Grid item xs={12} md={4}><Card><CardContent><Typography variant="h6">Unique Students Contacted Today</Typography><Typography variant="h3">{analytics.unique_students_contacted}</Typography></CardContent></Card></Grid>
+                            <Grid item xs={12} md={4}><Card><CardContent><Typography variant="h6">Most Frequent Subject (Overall)</Typography><Typography variant="h4" sx={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap' }}>{analytics.most_frequent_subject}</Typography></CardContent></Card></Grid>
+               
+                            <Grid item xs={12}><Paper sx={{p: 2}}><Typography variant="h6">Top 5 Students by Emails Received</Typography><List>{analytics.top_students.map((s, i) => (<React.Fragment key={s.reg_no}><ListItem><ListItemText primary={`${s.name} (${s.reg_no})`} secondary={`Total Emails: ${s.count}`} /></ListItem>{i < analytics.top_students.length - 1 && <Divider />}</React.Fragment>))}</List></Paper></Grid>
+                        </Grid> 
+            
+                        ) : <CircularProgress />)}
+
+                     {view === 'workflow' && ( 
+                        <Grid container spacing={3}>
+             
+                            <Grid item xs={12}>
+                                <Paper sx={{ p: 3, borderRadius: 2 }}>
+                      
+                                    <Typography variant="h5" gutterBottom>Step 1: Select PDF</Typography>
+                                    <Typography variant="body2" color="text.secondary" sx={{mb: 2}}>This workflow is specifically for finding and notifying students with low attendance (&lt;75%).</Typography>
+      
+                                    <Box sx={{ display: 'flex', gap: 2, alignItems: 'center' }}>
+                                       
+                                        <Button variant="outlined" component="label" startIcon={<UploadFileIcon />} disabled={isProcessingPdf}>
+                                            {isProcessingPdf ? 'Processing...' : 'Select PDF'}
+                      
+                                            <input type="file" hidden onChange={handleFileChange} accept=".pdf" />
+                                        </Button>
+          
+                                        <Typography variant="body2">{file ? file.name : 'No file selected.'}</Typography>
+                                        
+                                        {isProcessingPdf && <CircularProgress size={24} />}
+                                    </Box>
+                                    {intermediateCsv 
+                                        && <Typography variant="body2" color="success.main" sx={{mt: 1}}>PDF processed. Ready to list.</Typography>}
+                                </Paper>
+                            </Grid>
+        
+                            <Grid item xs={12}>
+                                <Paper sx={{ p: 3, borderRadius: 2 }}>
+                 
+                                    <Typography variant="h5" gutterBottom>Step 2: Fetch Student Details</Typography>
+                                    <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap' }}>
+      
+                                        <Button variant="contained" onClick={handleListAll} disabled={!intermediateCsv || isFetchingDetails || isProcessingPdf}>{isFetchingDetails ? <CircularProgress size={24} /> : 'List All Students (from PDF)'}</Button>
+                          
+                                        <Button variant="contained" onClick={handleListLow} disabled={!intermediateCsv || isFetchingDetails || isProcessingPdf}>{isFetchingDetails ? <CircularProgress size={24} /> : 'List Low Attendance (&lt;75%)'}</Button>
+                                    </Box>
+           
+                                </Paper>
+                            </Grid>
+                            
+                            <Grid item xs={12}>
+                                <Paper sx={{ p: 3, borderRadius: 2, display: 'flex', flexDirection: 'column' }}>
+                                 
+                                    <Typography variant="h5" gutterBottom>Step 3: Preview and Notify</Typography>
+                                    <textarea value={displayData.length > 0 ? JSON.stringify(displayData, null, 2) : ''} readOnly placeholder={!intermediateCsv ? "Please select a PDF first." : isFetchingDetails ? "Fetching student data..." : "Select 'List All' or 'List Low Attendance'..."} 
+                                        className="preview-box large" style={{ flexGrow: 1, minHeight: '400px', backgroundColor: isFetchingDetails ? '#333' : undefined }} />
+                                    <Button variant="contained" color="secondary" onClick={() => setIsModalOpen(true)} disabled={displayData.length === 0 || isFetchingDetails || isProcessingPdf} sx={{ mt: 2, alignSelf: 'flex-start' }}>Mail / Notify Selected Students</Button>
+     
+                                </Paper>
+                            </Grid>
+                      
+                        </Grid> 
+                     )}
+
+                     {view === 'alert' && ( 
+    
+                        <Paper sx={{ p: 3 }}>
+                            <Typography variant="h5" gutterBottom>Mass Alert / Notification</Typography>
+                    
+                            <Typography variant="body1" color="text.secondary" sx={{ mb: 2 }}>
+                                This tool will send an email to every student in the database.
+                    
+                                You can use templates for personalization (e.g., [Student Name]).
+                            </Typography>
+                            <Button 
+ 
+                                variant="contained" 
+                                color="secondary" 
+           
+                                onClick={() => setIsAlertModalOpen(true)}
+                                disabled={isSendingAlert}
+                      
+                            >
+                                {isSendingAlert ? <CircularProgress size={24} /> : 'Compose Mass Notification'}
+                            </Button>
+   
+                        </Paper> 
+                     )}
+
+                     {view === 'templates' && ( 
+        
+                        <Paper sx={{ p: 3 }}>
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}><Typography variant="h5">Email Templates</Typography><Button variant="contained" onClick={() => handleOpenTemplateModal()}>Create New Template</Button></Box>
+           
+                            {templates.map(t => (<Paper key={t.id} variant="outlined" sx={{ p: 2, mb: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><Typography>{t.name}</Typography><Box><Button size="small" onClick={() => handleOpenTemplateModal(t)}>Edit</Button><Button size="small" color="error" onClick={() => handleDeleteTemplate(t.id)}>Delete</Button></Box></Paper>))}
+                             {templates.length === 0 && <Typography color="text.secondary" 
+                                sx={{mt: 2}}>No templates created yet.</Typography>}
+                        </Paper> 
+                     )}
+
+                     {view === 'history' && ( 
+ 
+                        <Paper sx={{ p: 3 }}>
+                            <Typography variant="h5" gutterBottom>Communication History</Typography>
+                  
+                            <TextField fullWidth label="Search by Registration No. or Name" value={historySearch} onChange={e => { setHistorySearch(e.target.value); fetchHistory(e.target.value); }} sx={{ mb: 2 }} />
+                             {history.map(h => (
+                 
+                                <Paper key={h.id} variant="outlined" sx={{ p: 2, mb: 2 }}>
+                                     <Typography variant="subtitle1"><strong>To:</strong> {h.student_name} ({h.student_reg_no})</Typography>
+             
+                                     <Typography variant="body2" color="text.secondary"><strong>Recipients:</strong> {h.recipients}</Typography>
+                                     <Typography variant="body2" color="text.secondary"><strong>Sent By:</strong> {h.teacher_email} on {new Date(h.sent_at).toLocaleString()}</Typography>
+      
+                                     <TextField multiline fullWidth readOnly value={h.body} sx={{ mt: 1, bgcolor: '#222', '.MuiInputBase-input': { fontFamily: 'monospace' } }} />
+                              
+                                </Paper>
+                             ))}
+                             {history.length === 0 && <Typography color="text.secondary" sx={{mt: 2}}>No history found matching your search.</Typography>}
+    
+                        </Paper> 
+                     )}
+
+                     {view === 'teachers' && user.is_admin && ( 
+      
+                        <Paper sx={{ p: 3 }}>
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}><Typography variant="h5">Teacher Management</Typography><Button variant="contained" onClick={() => handleOpenEditModal({name: '', email: '', password: '', is_admin: false}, 'teacher')}>Add New Teacher</Button></Box>
+ 
+                            <TableContainer><Table size="small"><TableHead><TableRow><TableCell>Name</TableCell><TableCell>Email</TableCell><TableCell>Admin Status</TableCell><TableCell align="right">Actions</TableCell></TableRow></TableHead><TableBody>{teachers.map(t => (<TableRow key={t.id}><TableCell>{t.name}</TableCell><TableCell>{t.email}</TableCell><TableCell>{t.is_admin ? 'Yes' : 'No'}</TableCell><TableCell align="right"><Button size="small" onClick={() => handleOpenEditModal(t, 'teacher')}>Edit</Button><Button size="small" color="error" disabled={t.id === user.id} onClick={() => handleDeleteTeacher(t.id)}>Delete</Button></TableCell></TableRow>))}</TableBody></Table></TableContainer>
+                        </Paper> 
+ 
+                     )}
+
+                     {view === 'students' && ( 
+                        <Paper sx={{ p: 3 }}>
+   
+                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 2 }}>
+                                <Typography variant="h5">Student Management</Typography>
+        
+                                <Button variant="contained" onClick={() => handleOpenEditModal({reg_no: '', name: '', section: '', department: '', phone_number: '', email: '', parent_mobile: '', parent_email: ''}, 'student')}>Add New Student</Button>
+                            </Box>
+   
+                            <TextField 
+                                fullWidth 
+                  
+                                label="Search by Name or Registration No." 
+                                value={managementSearch} 
+                        
+                                onChange={e => setManagementSearch(e.target.value)} 
+                                onBlur={() => fetchStudents(managementSearch)} 
+                               
+                                onKeyPress={(e) => e.key === 'Enter' && fetchStudents(managementSearch)} 
+                                sx={{ mb: 2 }} 
+                            />
+     
+                            <TableContainer><Table size="small"><TableHead><TableRow><TableCell>Reg.No</TableCell><TableCell>Name</TableCell><TableCell>Email</TableCell><TableCell>Parent Email</TableCell><TableCell align="right">Actions</TableCell></TableRow></TableHead><TableBody>
+                                {loading ? <TableRow><TableCell colSpan={5} align="center"><CircularProgress /></TableCell></TableRow> :
+             
+                                    students.map(s => (<TableRow key={s.id}><TableCell>{s.reg_no}</TableCell><TableCell>{s.name}</TableCell><TableCell>{s.email || 'N/A'}</TableCell><TableCell>{s.parent_email || 'N/A'}</TableCell><TableCell align="right"><Button size="small" onClick={() => handleOpenEditModal(s, 'student')}>Edit</Button><Button size="small" color="error" onClick={() => handleDeleteStudent(s.id)}>Delete</Button></TableCell></TableRow>))
+                                }
+        
+                            </TableBody></Table></TableContainer>
+                        </Paper> 
+                     )}
+
+           
+                </Container>
+                 
+                 {/* Footer */}
+                 <Box component="footer" sx={{ bgcolor: 'background.paper', p: 3, mt: 'auto', borderTop: '1px solid', borderColor: 'divider' }}> 
+   
+                    <Container maxWidth="lg">
+                        <Typography variant="body2" color="text.secondary" align="center">Contact for support:</Typography>
+                        <Box sx={{ display: 'flex', justifyContent: 'center', 
+                            alignItems: 'center', gap: 2, mt: 1 }}>
+                            <MailOutlineIcon fontSize="small" /><Typography variant="body2">ujjwal3rd@gmail.com</Typography>
+                            <PhoneIcon fontSize="small" sx={{ ml: 2 }}/><Typography variant="body2">+91 8210052876</Typography>
+     
+                        </Box>
+                    </Container>
+                 </Box>
+             </Box>
+        
+             {/* Workflow Email Modal */}
+             <EmailModal open={isModalOpen} onClose={() => setIsModalOpen(false)} data={displayData} onSendAll={handleSendAllEmails} onSendSingle={handleSendSingleEmail} loading={loading} templates={templates} title="Review & Send Emails (Low Attendance)" />
+             
+             
+
+             {/* Mass Alert Modal */}
+             <MassAlertModal 
+                open={isAlertModalOpen} 
+                onClose={() => setIsAlertModalOpen(false)} 
+ 
+                onSend={handleSendMassAlert}
+                loading={isSendingAlert} 
+                templates={templates} 
+             />
+
+             {/* Template 
+                 Modal */}
+             <Modal open={templateModalOpen} onClose={() => setTemplateModalOpen(false)} closeAfterTransition BackdropComponent={Backdrop} BackdropProps={{ timeout: 500, sx: { backgroundColor: 'rgba(0, 0, 0, 0.7)' } }}>
+                  <Fade in={templateModalOpen}>
+                     <Box sx={editModalStyle}>
+    
+                        <Typography variant="h6" gutterBottom>{currentTemplate.id ? 'Edit' : 'Create'} Template</Typography>
+                        <TextField fullWidth label="Template Name" value={currentTemplate.name} onChange={e => setCurrentTemplate({...currentTemplate, name: e.target.value})} sx={{ mb: 2 }} />
+            
+                        <TextField fullWidth multiline rows={10} label="Template Body" value={currentTemplate.body} onChange={e => setCurrentTemplate({...currentTemplate, body: e.target.value})} helperText="Use [Student Name] and [Subject List] as placeholders." />
+                        <Box sx={{ mt: 2, display: 'flex', justifyContent: 'flex-end', gap: 1 }}><Button onClick={() => setTemplateModalOpen(false)}>Cancel</Button><Button variant="contained" onClick={handleSaveTemplate}>Save Template</Button></Box>
+     
+                    </Box>
+                 </Fade>
+             </Modal>
+             
+             {/* Management Edit Modal (for 
+                 BOTH types) */}
+             <Modal open={editModalOpen} onClose={() => setEditModalOpen(false)} closeAfterTransition BackdropComponent={Backdrop} BackdropProps={{ timeout: 500, sx: { backgroundColor: 'rgba(0, 0, 0, 0.7)' } }}>
+                  <Fade in={editModalOpen}>
+                     <Box sx={{...editModalStyle, overflowY: 'auto'}}> 
+ 
+                        <Typography variant="h6" gutterBottom>{currentItem?.id ? 'Edit' : 'Add'} {modalType}</Typography> 
+                        {currentItem && modalType === 'teacher' && ( 
+              
+                            <Grid container spacing={2} sx={{mt: 1}}>
+                                <Grid item xs={12}><TextField name="name" label="Full Name" value={currentItem.name || ''} onChange={handleItemChange} fullWidth/></Grid>
+                 
+                                <Grid item xs={12}><TextField name="email" label="Email" value={currentItem.email || ''} onChange={handleItemChange} fullWidth/></Grid>
+                                <Grid item xs={12}><TextField name="password" label={currentItem.id ? "New Password (optional)" : "Password"} type="password" onChange={handleItemChange} fullWidth helperText={currentItem.id ? "Leave blank to keep current password" : ""}/></Grid>
+                                <Grid item xs={12}><FormControlLabel control={<Checkbox name="is_admin" checked={currentItem.is_admin || false} onChange={handleItemChange} />} label="Is Admin"/></Grid>
+                            </Grid> 
+   
+                        )}
+                        {currentItem && modalType === 'student' && ( 
+                         
+                            <Grid container spacing={2} sx={{mt: 1}}>
+                                <Grid item xs={12} sm={6}><TextField name="reg_no" label="Reg.No" value={currentItem.reg_no || ''} onChange={handleItemChange} fullWidth/></Grid>
+                            
+                                <Grid item xs={12} sm={6}><TextField name="name" label="Name" value={currentItem.name || ''} onChange={handleItemChange} fullWidth/></Grid>
+                                <Grid item xs={12} sm={6}><TextField name="section" label="Section" value={currentItem.section || ''} onChange={handleItemChange} fullWidth/></Grid>
+                     
+                                <Grid item xs={12} sm={6}><TextField name="department" label="Department" value={currentItem.department || ''} onChange={handleItemChange} fullWidth/></Grid>
+                                <Grid item xs={12} sm={6}><TextField name="phone_number" label="Phone Number" value={currentItem.phone_number || ''} onChange={handleItemChange} fullWidth/></Grid>
+             
+                                <Grid item xs={12} sm={6}><TextField name="email" label="Email" value={currentItem.email || ''} onChange={handleItemChange} fullWidth/></Grid>
+                                <Grid item xs={12} sm={6}><TextField name="parent_mobile" label="Parent Mobile" value={currentItem.parent_mobile || ''} onChange={handleItemChange} fullWidth/></Grid>
+     
+                                <Grid item xs={12} sm={6}><TextField name="parent_email" label="Parent Email" value={currentItem.parent_email || ''} onChange={handleItemChange} fullWidth/></Grid>
+                            </Grid> 
+          
+                        )}
+                        <Box sx={{ mt: 3, display: 'flex', justifyContent: 'flex-end', gap: 1 }}><Button onClick={() => setEditModalOpen(false)}>Cancel</Button><Button variant="contained" onClick={handleSaveItem} disabled={loading}>{loading ? <CircularProgress size={24}/> : 'Save Changes'}</Button></Box>
+                 
+                    </Box>
+                 </Fade>
+             </Modal>
+
+             {/* Snackbar */}
+             <Snackbar open={snackbar.open} autoHideDuration={6000} onClose={() => setSnackbar({ ...snackbar, open: false })} anchorOrigin={{ vertical: 'bottom', horizontal: 'center' 
+                }}><Alert onClose={() => setSnackbar({ ...snackbar, open: false })} severity={snackbar.severity} sx={{ width: '100%' }}>{snackbar.message}</Alert></Snackbar>
+        </ThemeProvider>
+    );
+}
+
+export default App;

@@ -1,0 +1,30 @@
+body {
+    background-color: #121212 !important;
+}
+
+.preview-box {
+    width: 100%;
+    min-height: 200px;
+    font-family: monospace;
+    font-size: 0.85rem;
+    border: 1px solid rgba(255, 255, 255, 0.23);
+    border-radius: 4px;
+    padding: 12px;
+    background-color: #1e1e1e; /* Darker than paper for contrast */
+    color: #e0e0e0;
+    resize: vertical;
+}
+
+.preview-box.large {
+    height: 400px;
+}
+
+.email-body-textarea {
+    width: 100%;
+    margin-top: 16px;
+    font-family: monospace;
+    font-size: 0.9rem;
+    background-color: #121212 !important;
+    color: #e0e0e0 !important;
+}
+
