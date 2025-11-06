@@ -1,0 +1,9 @@
+Flask
+flask-cors
+PyJWT
+psycopg2-binary  # For PostgreSQL
+pandas
+pdfplumber
+python-dotenv
+werkzeug
+openpyxl  # For Excel export in /api/export-excel-structured
